@@ -1,0 +1,87 @@
+Placa utilizada: Cyclone II EP2C5T144
+
+Interface do Controle de matriz de motores de vibração (e acho que deveria ser a mesma para todos os circuitos, pelo menos aqueles que não precisam de streams)
+
+entity MotorMatrixControl is
+    generic(
+        rows: positive := 4;
+        cols: positive := 4;
+        dataWidth := positive := 32);
+    port(
+        clock, reset, enable, acknowledge, test: in std_logic;
+        bistIn: in std_logic;
+        readwrite: in std_logic_vector(1 downto 0);
+        writedata : in std_logic_vector(dataWidth-1 downto 0);
+        readdata : out std_logic_vector(dataWidth-1 downto 0);
+        interrupt: out std_logic;
+        bistOut: out std_logic
+
+    );
+end entity;
+
+
+
+Descrição geral da interface:
+
+No generic primeiro são incluídos os parâmetros específicos do sistema. Por último, a largura do sinal de dados. No caso da matriz de motores de vibração, os parâmetros são a quantidade de linhas (rows) e colunas (cols).
+
+A interface do port é sempre a mesma:
+clock, reset: sinais óbvios.
+
+enable: quando em 0 o sistema "congela", e quando em 1 tem seu funcionamento normal. Usado para iniciar um comando. Assim, a matriz de motores está sempre executando os comandos que estão no registrador de comando, e a cada comando esperam o acknowledge 1 para se preparar para o próximo comando.
+
+test: quando em 1 o sistema está em estado de teste, e quando em 0 tem seu funcionamento normal  (assume-se que está sempre em 0. Não é preciso ninguém implementar o estado de teste).
+
+bistIn: Entrada serial de teste. Não precisa fazer nada.
+
+readwrite: quando o sistema estiver sendo endereçado, este sinal diz se o sistema está sendo endereçao para leitura ("10") ou para escrita ("01"). "00" significa que o sistema não foi endereçado e "11" nunca deve acontecer.
+
+acknowledge: quando em 1, indica que o pedido de interrupção foi atendido (reconhecido interrupt 1). Ao receber esse sinal, o sistema deve retirar a sinalização de interrupção (interrupt <= 0) e |||/*a decidir*/ zerar o comando (reset registrador de comandos)|||. Após o sinal de interrupt ir para 0, o controlador (externo) de interrupções irá voltar acknowledge para 0.
+
+writedata: sinal de entrada que envia os valores de comandos e dados no seguinte formato: controle 8 bits | linha 8 bits | coluna 8 bits | valor 8 bits
+
+readdata: sinal de saída que envia os valores de status a ser definido.
+
+bistOut: saída serial de teste. Não precisa fazer nada.
+
+interrupt: sinal de saída pelo qual o sistema sinaliza ao mundo externo que algum comando foi concluído.
+
+
+
+Descrição específica para o controle de matriz de motores:
+
+Quando wirtedata recebe valores a serem escritos no registrador de comandos_dados, ele contém um comando que o sistema deve ser capaz de executar. Os possíveis valores são:
+1: ajustar a potência (Valor de 0-255 que diz quanto de potência um motor irá ligar)
+2: ajustar a variação (Valor de 0-255 que diz quanto tempo demora para a potência passar da potência anterior para a próxima)
+4: ajustar o decaimento (Valor de 0-255 que diz quanto tempo demora para a potência passar do valor anterior para 0)
+8: ajustar o envio para a próxima linha (copiar todos os valores dos motores para os motores da próxima linha)
+16: ajustar o envio para a próxima coluna (copiar todos os valores dos motores para os motores da próxima coluna)
+Para ligar todos os motores a linha e coluna é 255.
+
+E o dado vem no seguinte formato:
+bits 31-24 : comando
+bits 23-16 : linha
+bits 15-8  : coluna
+bits 7-0   : valor (potência, variação, decaimento, etc ...)
+
+Quando o sistema é endereçado para ler (read="10") do registrador de status (readdata), o registrador data deve vir a conter o estado atual do sistena: dados recebidos do sistema, no seguinte formato:
+bit 0: último comando foi concluído (interrupt)
+/*a acrescentar mais status*/
+...
+
+Motor
+No bloco do motor terá um registrador para salvar qual a potência atual e um registrador para salvar qual a potência desejada.
+Para ligar todos os motores a linha e coluna é 255.
+Também terá que ser salvo os valores de linha e coluna do motor em questão em tempo de compilação.
+Haverá também 2 flip-flops que salvam quando está ajustando a variação e o decaimento.
+
+Exemplo de acionamento:
+
+Tempo 0:
+data = 0 2 1 50 (3 bytes)
+readwrite = 01 
+Descrição: escreve 0 2 1 50 no registrador de comandos_dados. O significado é "ajustar a potência", ou seja, coloque a potência 50 no motor (por hora será usado potências de 0-100) da linha 1 e da coluna 2. Lembrando que neste momento o enable será zero, então não é necessário implementar nada sobre quando começa a funcionar.
+
+Agora o enable passa a ser 1. O comando é executado (FSM com os comandos) e envia interrupt <= 1 quando terminar. Após isso espera acknowledge ser 1. Então zera o interrupt e neste momento enable passará a ser zero tambẽm (pode voltar para o estado de espera comando).
+
+O curcuito externo (pode ser a CPU ou um controlador de interrupções ex APIC) deve esperar interrupt <= 1 e então deve colocar acknowledge <= 1. Então espera interrupt <= 0 e então coloca acknowledge <= 0 e enable <= 0. Depois disso pode enviar outro comando.
